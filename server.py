@@ -25,17 +25,17 @@ def send_message(host, port, message):
         s.sendall(json.dumps(message).encode('utf-8'))
         s.close()
         return True
-    except socket.error as e:
-        # This is expected for crashed servers, so we don't need a loud error
+    except socket.error:
+        # Expected if the server is down
         return False
 
 def handle_client_request(conn, addr):
     """Handles requests from clients."""
-    global state, crash_counter, role
+    global state, crash_counter, role, primary_id
 
     try:
         data = conn.recv(1024).decode('utf-8')
-        if not data: # Handle empty data
+        if not data:
             return
         
         request = json.loads(data)
@@ -73,8 +73,6 @@ def handle_client_request(conn, addr):
         if crash_counter >= 5 and role == 'primary':
             print(f"[{SERVERS[server_id]['name']}] CRITICAL: CRASH FAULT TRIGGERED. Shutting down...")
             conn.close()
-            # It's cleaner to handle this with a flag to exit gracefully
-            # For this simple project, sys.exit() is fine.
             sys.exit(1)
 
         conn.sendall(json.dumps(response).encode('utf-8'))
@@ -99,11 +97,8 @@ def handle_replica_message(conn, addr):
             with state_lock:
                 state = message['state']
                 primary_id = message.get('primary_id', primary_id)
-            print(f"[{SERVERS[server_id]['name']}] State updated by primary. New primary is {primary_id}")
-        elif message['type'] == 'HEARTBEAT':
-            # This can be used for more advanced primary detection
-            pass
-
+            print(f"[{SERVERS[server_id]['name']}] State updated by primary ({primary_id}).")
+            
     except (json.JSONDecodeError, socket.error) as e:
         print(f"Error handling replica message from {addr}: {e}")
     finally:
@@ -118,7 +113,6 @@ def client_listener_thread():
     while True:
         try:
             conn, addr = s.accept()
-            # Check role before starting a thread
             if role == 'primary':
                 threading.Thread(target=handle_client_request, args=(conn, addr), daemon=True).start()
             else:
@@ -130,7 +124,6 @@ def client_listener_thread():
 def replica_listener_thread():
     """Listens for incoming replica messages."""
     s_replica = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Use a port that is separate from the client port
     s_replica.bind((SERVERS[server_id]['host'], SERVERS[server_id]['port'] + 1))
     s_replica.listen(5)
     print(f"[{SERVERS[server_id]['name']}] Listening for replica messages on {SERVERS[server_id]['host']}:{SERVERS[server_id]['port']+1}")
@@ -141,28 +134,24 @@ def replica_listener_thread():
         except Exception as e:
             print(f"Replica listener error: {e}")
 
-
 def primary_heartbeat_thread():
     """Backup servers check if the primary is still alive."""
     global primary_id, role
 
     while True:
         if role == 'backup':
-            # Assume primary is down until a connection is made
             is_primary_alive = False
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(2)
-                # Attempt to connect to the primary's replica port
                 s.connect((SERVERS[primary_id]['host'], SERVERS[primary_id]['port'] + 1))
                 s.close()
                 is_primary_alive = True
             except (socket.error, ConnectionRefusedError):
-                pass # Primary is likely down
+                pass 
             
             if not is_primary_alive:
                 print(f"[{SERVERS[server_id]['name']}] Primary server ({primary_id}) is down. Initiating failover...")
-                # Elect the next server in the list as the new primary
                 new_primary_id = (primary_id + 1) % len(SERVERS)
                 
                 if server_id == new_primary_id:
@@ -179,7 +168,6 @@ def primary_heartbeat_thread():
                             }
                             send_message(server['host'], server['port'] + 1, update_message)
                 else:
-                    # Update who this backup thinks the primary is
                     primary_id = new_primary_id
                     print(f"[{SERVERS[server_id]['name']}] New primary is {SERVERS[primary_id]['name']}. Waiting...")
         time.sleep(5)
@@ -203,14 +191,12 @@ if __name__ == "__main__":
 
     print(f"Starting {SERVERS[server_id]['name']} as {role.upper()}...")
 
-    # Start a dedicated thread for each listener
     threading.Thread(target=client_listener_thread, daemon=True).start()
     threading.Thread(target=replica_listener_thread, daemon=True).start()
 
     if role == 'backup':
         threading.Thread(target=primary_heartbeat_thread, daemon=True).start()
 
-    # The main thread can be kept alive to prevent the process from exiting
     try:
         while True:
             time.sleep(1)
