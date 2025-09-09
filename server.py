@@ -6,7 +6,7 @@ import random
 import sys
 from config import SERVERS
 
-# --- Server State Variables ---
+# Server State Variables
 state = {}
 server_id = -1
 role = 'backup'
@@ -14,7 +14,7 @@ primary_id = -1
 state_lock = threading.Lock()
 crash_counter = 0
 
-# --- Communication and Handlers ---
+# Communication and Handlers
 
 def send_message(host, port, message):
     """Sends a message to a specific host and port."""
@@ -41,12 +41,12 @@ def handle_client_request(conn, addr):
         request = json.loads(data)
         print(f"[{SERVERS[server_id]['name']}] Received client request: {request}")
 
-        # --- Simulate Omission Fault ---
+        # Simulate Omission Fault
         if random.random() < 0.2 and role == 'primary':
             print(f"[{SERVERS[server_id]['name']}] Simulating omission fault: Request dropped.")
             return
 
-        # --- Process request and update state ---
+        # Process request and update state
         with state_lock:
             if request['type'] == 'PUT':
                 state[request['key']] = request['value']
@@ -57,17 +57,18 @@ def handle_client_request(conn, addr):
             else:
                 response = {'status': 'error', 'message': 'Invalid request type.'}
         
-        # --- Propagate state change to backups ---
+        # Propagate state change to backups
         if role == 'primary':
             for i, server in enumerate(SERVERS):
                 if i != server_id:
                     update_message = {
                         'type': 'STATE_UPDATE',
-                        'state': state
+                        'state': state,
+                        'primary_id': primary_id
                     }
                     send_message(server['host'], server['port'] + 1, update_message)
 
-        # --- Simulate Crash Fault ---
+        # Simulate Crash Fault
         crash_counter += 1
         if crash_counter >= 5 and role == 'primary':
             print(f"[{SERVERS[server_id]['name']}] CRITICAL: CRASH FAULT TRIGGERED. Shutting down...")
@@ -97,7 +98,8 @@ def handle_replica_message(conn, addr):
         if message['type'] == 'STATE_UPDATE':
             with state_lock:
                 state = message['state']
-            print(f"[{SERVERS[server_id]['name']}] State updated by primary.")
+                primary_id = message.get('primary_id', primary_id)
+            print(f"[{SERVERS[server_id]['name']}] State updated by primary. New primary is {primary_id}")
         elif message['type'] == 'HEARTBEAT':
             # This can be used for more advanced primary detection
             pass
@@ -146,23 +148,43 @@ def primary_heartbeat_thread():
 
     while True:
         if role == 'backup':
+            # Assume primary is down until a connection is made
+            is_primary_alive = False
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(2)
                 # Attempt to connect to the primary's replica port
                 s.connect((SERVERS[primary_id]['host'], SERVERS[primary_id]['port'] + 1))
                 s.close()
+                is_primary_alive = True
             except (socket.error, ConnectionRefusedError):
-                print(f"[{SERVERS[server_id]['name']}] Primary server is down. Initiating failover...")
-                if server_id > primary_id:
+                pass # Primary is likely down
+            
+            if not is_primary_alive:
+                print(f"[{SERVERS[server_id]['name']}] Primary server ({primary_id}) is down. Initiating failover...")
+                # Elect the next server in the list as the new primary
+                new_primary_id = (primary_id + 1) % len(SERVERS)
+                
+                if server_id == new_primary_id:
                     role = 'primary'
                     primary_id = server_id
                     print(f"[{SERVERS[server_id]['name']}] I am the new primary!")
+                    # Announce new role to other servers
+                    for i, server in enumerate(SERVERS):
+                        if i != server_id:
+                            update_message = {
+                                'type': 'STATE_UPDATE',
+                                'state': state,
+                                'primary_id': primary_id
+                            }
+                            send_message(server['host'], server['port'] + 1, update_message)
                 else:
-                    print(f"[{SERVERS[server_id]['name']}] Another backup will take over. Waiting...")
+                    # Update who this backup thinks the primary is
+                    primary_id = new_primary_id
+                    print(f"[{SERVERS[server_id]['name']}] New primary is {SERVERS[primary_id]['name']}. Waiting...")
         time.sleep(5)
 
-# --- Main Logic ---
+# Main Logic
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python server.py <server_id>")

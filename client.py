@@ -23,8 +23,8 @@ def send_request(server, request, timeout=5):
 def main():
     primary_server_index = 0
     
-    # --- Test Case 1: Demonstrating Crash Fault Tolerance ---
-    print("\n--- TEST CASE 1: CRASH FAULT TOLERANCE ---")
+    # Test Case 1: Demonstrating Crash Fault Tolerance
+    print("\ TEST CASE 1: CRASH FAULT TOLERANCE")
     requests_sent = 0
     while requests_sent < 7:
         print(f"\nAttempting request {requests_sent + 1}...")
@@ -55,8 +55,8 @@ def main():
         
         time.sleep(1)
 
-    # --- Test Case 2: Demonstrating Omission Fault Tolerance ---
-    print("\n--- TEST CASE 2: OMISSION FAULT TOLERANCE ---")
+    # Test Case 2: Demonstrating Omission Fault Tolerance
+    print("\ TEST CASE 2: OMISSION FAULT TOLERANCE")
     request = {'type': 'GET', 'key': 'key-3'}
     response = None
     retries = 0
